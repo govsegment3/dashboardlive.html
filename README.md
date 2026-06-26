@@ -143,7 +143,7 @@
     </main>
 
     <script>
-        const csvUrl = 'https://docs.google.com/spreadsheets/d/1wWPvnNoOL44xBU393gF4j9DM873BP8ZSh0K71fYHKD8/edit?gid=0#gid=0';
+        const csvUrl = ''https://docs.google.com/spreadsheets/d/1wWPvnNoOL44xBU393gF4j9DM873BP8ZSh0K71fYHKD8/pub?gid=0&single=true&output=csv';
 
         let rawData = [];
         let filteredData = [];

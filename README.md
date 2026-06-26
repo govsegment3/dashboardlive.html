@@ -28,7 +28,7 @@
         
         <div class="flex flex-wrap gap-3 items-center w-full md:w-auto justify-end">
             <div class="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700 text-xs">
-                <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                <span id="statusDot" class="w-2 h-2 bg-amber-500 rounded-full animate-pulse"></span>
                 <span id="updateStatus" class="text-slate-300 font-medium">Menghubungkan data...</span>
             </div>
             <div class="flex flex-col min-w-[130px]">
@@ -50,6 +50,13 @@
     </header>
 
     <main class="p-4 md:p-6 max-w-[1600px] mx-auto space-y-6">
+        
+        <div id="errorAlert" class="hidden bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-sm flex flex-col gap-2 shadow-xs">
+            <div class="flex items-center gap-2 font-bold text-rose-800">
+                <i class="fa-solid fa-triangle-exclamation"></i> Terjadi Masalah Sinkronisasi Data GSheets
+            </div>
+            <p id="errorMsg">Pesan Eror Mendetail Akan Muncul di Sini...</p>
+        </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div class="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between">
@@ -143,7 +150,8 @@
     </main>
 
     <script>
-        const csvUrl = ''https://docs.google.com/spreadsheets/d/1wWPvnNoOL44xBU393gF4j9DM873BP8ZSh0K71fYHKD8/pub?gid=0&single=true&output=csv';
+        // TAUTAN DATA FIX MENGGUNAKAN EKSPOR DATAVALUE CSV YANG DISETUJUI GOOGLE
+        const csvUrl = 'https://docs.google.com/spreadsheets/d/1wWPvnNoOL44xBU393gF4j9DM873BP8ZSh0K71fYHKD8/pub?gid=0&single=true&output=csv';
 
         let rawData = [];
         let filteredData = [];
@@ -152,65 +160,94 @@
         let chartTrend, chartComposition, chartSCRProject, chartVolumeProject;
         let projectListInitialized = false;
 
-        // Acuan Target Konstan jika data Target SCR kosong / bernilai 0 di row tertentu
         const projectTargetsFallback = { 'BMKG': 0.95, 'CC POLRI (Mabes)': 0.9, 'KEJAGUNG': 0.95, 'KEMENKOP': 0.9 };
 
         async function fetchLiveGSheets() {
-            document.getElementById('updateStatus').textContent = "Sinkronisasi...";
+            setLoadingState(true, "Sinkronisasi...");
+            hideError();
+
             Papa.parse(csvUrl, {
                 download: true,
                 header: true,
                 skipEmptyLines: true,
                 dynamicTyping: true,
                 complete: function(results) {
+                    if (!results.data || results.data.length === 0) {
+                        showError("File Google Sheets berhasil terhubung, tetapi datanya kosong. Pastikan Anda memilih sheet yang berisi baris data transaksi pada pengaturan 'Publish to Web'.");
+                        setLoadingState(false, "Data Kosong", false);
+                        return;
+                    }
                     parseAndCleanData(results.data);
                 },
                 error: function(err) {
-                    document.getElementById('updateStatus').textContent = "Gagal memuat!";
-                    console.error(err);
+                    showError("Gagal mengunduh CSV. Hal ini biasanya karena link spreadsheet belum di-'Publish to Web' atau setelan tipenya bukan Comma-Separated Values (.csv). Deteksi Sistem: " + JSON.stringify(err));
+                    setLoadingState(false, "Gagal Sinkronisasi", false);
                 }
             });
         }
 
         function parseAndCleanData(rawRows) {
-            rawData = rawRows.map(row => {
-                // Parsing aman menyesuaikan judul kolom asli spreadsheet Anda
-                let voiceVal = typeof row['Call Offered (Inbound)'] === 'string' 
-                    ? parseInt(row['Call Offered (Inbound)'].replace(/,/g, '')) || 0 
-                    : parseInt(row['Call Offered (Inbound)']) || 0;
+            try {
+                rawData = rawRows.map((row, index) => {
+                    // Normalisasi nama kolom (mengatasi huruf besar/kecil campuran di GSheets)
+                    let projectVal = row['PROJECT'] || row['Project'] || row['project'];
+                    let monthVal = row['MONTH'] || row['Month'] || row['month'];
+                    let dateVal = row['DATE'] || row['Date'] || row['date'];
+                    
+                    let voiceKey = row['Call Offered (Inbound)'] || row['Call Offered'] || 0;
+                    let voiceVal = typeof voiceKey === 'string' 
+                        ? parseInt(voiceKey.replace(/,/g, '')) || 0 
+                        : parseInt(voiceKey) || 0;
 
-                let digitalVal = parseInt(row['Total Digital']) || 0;
-                
-                let scrRaw = parseFloat(row['SCR']) || 0;
-                let scrClean = scrRaw > 1 ? scrRaw / 100 : scrRaw; // Normalisasi jika ada penulisan persentase mentah (99 -> 0.99)
+                    let digitalKey = row['Total Digital'] || row['Total digital'] || 0;
+                    let digitalVal = parseInt(digitalKey) || 0;
+                    
+                    let scrKey = row['SCR'] || row['scr'] || 0;
+                    let scrRaw = parseFloat(scrKey) || 0;
+                    let scrClean = scrRaw > 1 ? scrRaw / 100 : scrRaw;
 
-                let targetRaw = parseFloat(row['Target SCR']) || 0;
-                let targetClean = targetRaw === 0 ? (projectTargetsFallback[row['PROJECT']] || 0.95) : targetRaw;
+                    let targetKey = row['Target SCR'] || row['Target scr'] || 0;
+                    let targetRaw = parseFloat(targetKey) || 0;
+                    let targetClean = targetRaw === 0 ? (projectTargetsFallback[projectVal] || 0.95) : targetRaw;
 
-                return {
-                    project: row['PROJECT'],
-                    month: row['MONTH'],
-                    date: row['DATE'],
-                    voice: voiceVal,
-                    digital: digitalVal,
-                    total: voiceVal + digitalVal,
-                    scr: scrClean,
-                    target: targetClean
-                };
-            }).filter(item => item.project !== undefined && item.project !== null && item.project !== "");
+                    return {
+                        project: projectVal,
+                        month: monthVal,
+                        date: dateVal,
+                        voice: voiceVal,
+                        digital: digitalVal,
+                        total: voiceVal + digitalVal,
+                        scr: scrClean,
+                        target: targetClean
+                    };
+                }).filter(item => item.project !== undefined && item.project !== null && item.project !== "");
 
-            if (!projectListInitialized) {
-                initProjectDropdown();
+                if (rawData.length === 0) {
+                    showError("Kolom 'PROJECT' tidak ditemukan di baris pertama file Google Sheets Anda. Harap pastikan nama header kolom di GSheets ditulis dengan huruf besar/kapital.");
+                    setLoadingState(false, "Kolom Tidak Valid", false);
+                    return;
+                }
+
+                if (!projectListInitialized) {
+                    initProjectDropdown();
+                }
+
+                updateDashboard();
+                const now = new Date();
+                setLoadingState(false, "Terhubung: " + now.toLocaleTimeString('id-ID'), true);
+            } catch (e) {
+                showError("Gagal memproses struktur baris tabel: " + e.message);
+                setLoadingState(false, "Eror Pemrosesan", false);
             }
-
-            updateDashboard();
-            const now = new Date();
-            document.getElementById('updateStatus').textContent = "Selesai Sync: " + now.toLocaleTimeString('id-ID');
         }
 
         function initProjectDropdown() {
             const projects = [...new Set(rawData.map(item => item.project))].sort();
             const projectSelect = document.getElementById('filterProject');
+            
+            // Bersihkan dropdown kecuali opsi pertama
+            projectSelect.innerHTML = '<option value="ALL">Semua Proyek</option>';
+            
             projects.forEach(proj => {
                 if(proj) {
                     const opt = document.createElement('option');
@@ -231,7 +268,6 @@
                 return matchMonth && matchProject;
             });
 
-            // Hitung KPI
             let totalTrafik = 0, totalVoice = 0, totalDigital = 0, sumSCR = 0, countSCR = 0, targetTercapai = 0, rowsWithTarget = 0;
 
             filteredData.forEach(item => {
@@ -265,7 +301,8 @@
             const pageData = filteredData.slice(start, end);
 
             if(pageData.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">Tidak ada data terdeteksi</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">Tidak ada data transaksi ditemukan</td></tr>`;
+                document.getElementById('tableCounter').textContent = "Menampilkan 0 dari 0 data";
                 return;
             }
 
@@ -383,10 +420,30 @@
             document.body.removeChild(link);
         }
 
-        // Panggil fungsi pengambilan data pertama kali
+        function setLoadingState(isLoading, message, isSuccess = null) {
+            const statusText = document.getElementById('updateStatus');
+            const statusDot = document.getElementById('statusDot');
+            statusText.textContent = message;
+            
+            if (isLoading) {
+                statusDot.className = "w-2 h-2 bg-amber-500 rounded-full animate-pulse";
+            } else if (isSuccess === true) {
+                statusDot.className = "w-2 h-2 bg-emerald-500 rounded-full";
+            } else if (isSuccess === false) {
+                statusDot.className = "w-2 h-2 bg-rose-500 rounded-full";
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('errorAlert').classList.remove('hidden');
+            document.getElementById('errorMsg').textContent = message;
+        }
+
+        function hideError() {
+            document.getElementById('errorAlert').classList.add('hidden');
+        }
+
         fetchLiveGSheets();
-        
-        // AUTO REFRESH: Lakukan sinkronisasi otomatis ke Google Sheets setiap 30 detik
         setInterval(fetchLiveGSheets, 30000);
     </script>
 </body>
